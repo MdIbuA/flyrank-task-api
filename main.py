@@ -1,9 +1,18 @@
+"""Task API: a small in-memory CRUD API built with FastAPI."""
+
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool, StrictStr, field_validator, model_validator
 
-app = FastAPI()
+app = FastAPI(
+    title="Task API",
+    version="1.0",
+    description=(
+        "A to-do list API with full CRUD on an in-memory list. "
+        "Data is lost when the server restarts; that is intentional for this stage."
+    ),
+)
 
 # In-memory "database": lives only as long as the process does.
 tasks: list[dict] = [
@@ -14,6 +23,8 @@ tasks: list[dict] = [
 next_id = 4
 
 
+# ---------- Schemas ----------
+
 def clean_title(value: str) -> str:
     value = value.strip()
     if not value:
@@ -21,8 +32,16 @@ def clean_title(value: str) -> str:
     return value
 
 
+class Task(BaseModel):
+    id: int
+    title: str
+    done: bool
+
+
 class TaskCreate(BaseModel):
     title: StrictStr
+
+    model_config = {"json_schema_extra": {"examples": [{"title": "Buy milk"}]}}
 
     @field_validator("title")
     @classmethod
@@ -33,6 +52,8 @@ class TaskCreate(BaseModel):
 class TaskUpdate(BaseModel):
     title: StrictStr | None = None
     done: StrictBool | None = None
+
+    model_config = {"json_schema_extra": {"examples": [{"title": "Buy oat milk", "done": True}]}}
 
     @field_validator("title")
     @classmethod
@@ -45,6 +66,16 @@ class TaskUpdate(BaseModel):
             raise ValueError("send at least one of: title, done")
         return self
 
+
+class ErrorMessage(BaseModel):
+    error: str
+
+
+NOT_FOUND = {404: {"model": ErrorMessage, "description": "No task with that id"}}
+BAD_REQUEST = {400: {"model": ErrorMessage, "description": "Invalid request body or id"}}
+
+
+# ---------- Helpers ----------
 
 def error(status: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": message})
@@ -64,22 +95,30 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     return error(400, f"{field}: {message}" if field else message)
 
 
-@app.get("/")
+# ---------- Routes ----------
+
+@app.get("/", tags=["meta"], summary="Describe this API")
 def root():
     return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks"]}
 
 
-@app.get("/health")
+@app.get("/health", tags=["meta"], summary="Liveness check")
 def health():
     return {"status": "ok"}
 
 
-@app.get("/tasks")
+@app.get("/tasks", response_model=list[Task], tags=["tasks"], summary="List all tasks")
 def list_tasks():
     return tasks
 
 
-@app.get("/tasks/{task_id}")
+@app.get(
+    "/tasks/{task_id}",
+    response_model=Task,
+    responses={**NOT_FOUND, **BAD_REQUEST},
+    tags=["tasks"],
+    summary="Get one task by id",
+)
 def get_task(task_id: int):
     task = find_task(task_id)
     if task is None:
@@ -87,7 +126,14 @@ def get_task(task_id: int):
     return task
 
 
-@app.post("/tasks", status_code=201)
+@app.post(
+    "/tasks",
+    status_code=201,
+    response_model=Task,
+    responses=BAD_REQUEST,
+    tags=["tasks"],
+    summary="Create a task",
+)
 def create_task(payload: TaskCreate):
     global next_id
     task = {"id": next_id, "title": payload.title, "done": False}
@@ -96,7 +142,13 @@ def create_task(payload: TaskCreate):
     return task
 
 
-@app.put("/tasks/{task_id}")
+@app.put(
+    "/tasks/{task_id}",
+    response_model=Task,
+    responses={**NOT_FOUND, **BAD_REQUEST},
+    tags=["tasks"],
+    summary="Update a task's title and/or done flag",
+)
 def update_task(task_id: int, payload: TaskUpdate):
     task = find_task(task_id)
     if task is None:
@@ -108,7 +160,13 @@ def update_task(task_id: int, payload: TaskUpdate):
     return task
 
 
-@app.delete("/tasks/{task_id}", status_code=204)
+@app.delete(
+    "/tasks/{task_id}",
+    status_code=204,
+    responses={**NOT_FOUND, **BAD_REQUEST},
+    tags=["tasks"],
+    summary="Delete a task",
+)
 def delete_task(task_id: int):
     task = find_task(task_id)
     if task is None:
