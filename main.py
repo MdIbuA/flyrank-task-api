@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, StrictStr, field_validator
+from pydantic import BaseModel, StrictBool, StrictStr, field_validator, model_validator
 
 app = FastAPI()
 
@@ -14,16 +14,36 @@ tasks: list[dict] = [
 next_id = 4
 
 
+def clean_title(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("title must not be empty")
+    return value
+
+
 class TaskCreate(BaseModel):
     title: StrictStr
 
     @field_validator("title")
     @classmethod
     def title_not_blank(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("title must not be empty")
-        return value
+        return clean_title(value)
+
+
+class TaskUpdate(BaseModel):
+    title: StrictStr | None = None
+    done: StrictBool | None = None
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, value: str | None) -> str | None:
+        return None if value is None else clean_title(value)
+
+    @model_validator(mode="after")
+    def at_least_one_field(self):
+        if self.title is None and self.done is None:
+            raise ValueError("send at least one of: title, done")
+        return self
 
 
 def error(status: int, message: str) -> JSONResponse:
@@ -74,3 +94,24 @@ def create_task(payload: TaskCreate):
     next_id += 1
     tasks.append(task)
     return task
+
+
+@app.put("/tasks/{task_id}")
+def update_task(task_id: int, payload: TaskUpdate):
+    task = find_task(task_id)
+    if task is None:
+        return error(404, f"Task {task_id} not found")
+    if payload.title is not None:
+        task["title"] = payload.title
+    if payload.done is not None:
+        task["done"] = payload.done
+    return task
+
+
+@app.delete("/tasks/{task_id}", status_code=204)
+def delete_task(task_id: int):
+    task = find_task(task_id)
+    if task is None:
+        return error(404, f"Task {task_id} not found")
+    tasks.remove(task)
+    return Response(status_code=204)
