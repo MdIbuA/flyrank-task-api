@@ -1,6 +1,8 @@
 """Task API: a small in-memory CRUD API built with FastAPI."""
 
-from fastapi import FastAPI, Request, Response
+import copy
+
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool, StrictStr, field_validator, model_validator
@@ -15,12 +17,13 @@ app = FastAPI(
 )
 
 # In-memory "database": lives only as long as the process does.
-tasks: list[dict] = [
+SEED_TASKS = [
     {"id": 1, "title": "Read the FastAPI first-steps guide", "done": True},
     {"id": 2, "title": "Build the read endpoints", "done": False},
     {"id": 3, "title": "Push the repo to GitHub", "done": False},
 ]
-next_id = 4
+tasks: list[dict] = copy.deepcopy(SEED_TASKS)
+next_id = len(SEED_TASKS) + 1
 
 
 # ---------- Schemas ----------
@@ -99,7 +102,7 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.get("/", tags=["meta"], summary="Describe this API")
 def root():
-    return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks"]}
+    return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks", "/stats", "/reset"]}
 
 
 @app.get("/health", tags=["meta"], summary="Liveness check")
@@ -107,8 +110,36 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/tasks", response_model=list[Task], tags=["tasks"], summary="List all tasks")
-def list_tasks():
+@app.get(
+    "/tasks",
+    response_model=list[Task],
+    tags=["tasks"],
+    summary="List tasks, optionally filtered by done and/or a title search",
+)
+def list_tasks(
+    done: bool | None = Query(None, description="Only finished (true) or open (false) tasks"),
+    search: str | None = Query(None, description="Case-insensitive substring of the title"),
+):
+    result = tasks
+    if done is not None:
+        result = [t for t in result if t["done"] == done]
+    if search:
+        needle = search.lower()
+        result = [t for t in result if needle in t["title"].lower()]
+    return result
+
+
+@app.get("/stats", tags=["extras"], summary="Count total, done and open tasks")
+def stats():
+    done_count = sum(1 for t in tasks if t["done"])
+    return {"total": len(tasks), "done": done_count, "open": len(tasks) - done_count}
+
+
+@app.post("/reset", response_model=list[Task], tags=["extras"], summary="Restore the 3 example tasks")
+def reset():
+    global tasks, next_id
+    tasks = copy.deepcopy(SEED_TASKS)
+    next_id = len(SEED_TASKS) + 1
     return tasks
 
 
